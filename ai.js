@@ -1,27 +1,59 @@
-// ai.js
+// ai.js – DeepSeek API (v1) con roles correctos, timeout y costo preciso
+require('dotenv').config();
 const axios = require('axios');
-const buildPrompt = require('./utils/promptBuilder');
+const fs    = require('fs');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+const API_KEY  = process.env.DEEPSEEK_API_KEY;
+const MODEL    = process.env.DEEPSEEK_MODEL  || 'deepseek-chat';
+
+const PRICE_IN  = parseFloat(process.env.DEEPSEEK_PRICE_INPUT_1M  || '0'); // USD / 1M IN
+const PRICE_OUT = parseFloat(process.env.DEEPSEEK_PRICE_OUTPUT_1M || '0'); // USD / 1M OUT
+
+if (!API_KEY) throw new Error('DEEPSEEK_API_KEY no definido en .env');
+
+const systemPrompt = fs.readFileSync('./prompt_Einsoft.txt', 'utf-8').trim();
 
 async function enviarAIA(userMessage) {
-    const prompt = buildPrompt(userMessage);
-    const body = {
-        contents: [{ parts: [{ text: prompt }] }]
-    };
+  try {
+    console.log('[DeepSeek] usando modelo:', MODEL);
 
-    try {
-        const res = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-            body,
-            { params: { key: GEMINI_API_KEY } }
-        );
-        return (res.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim() || 'Sin respuesta de Gemini.';
-    } catch (error) {
-        console.error('❌ Error al llamar a la API de Gemini:', error.response?.data || error.message);
-        throw error;
+    const res = await axios.post(
+      'https://api.deepseek.com/v1/chat/completions',
+      {
+        model: MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMessage }
+        ],
+        stream: false
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000         // 60 s por si el prompt es largo
+      }
+    );
+
+    const text  = res.data.choices?.[0]?.message?.content?.trim() || 'Sin respuesta de DeepSeek.';
+    const usage = res.data.usage || null;
+
+    let cost = null;
+    if (usage) {
+      cost = Number((
+        (usage.prompt_tokens     / 1_000_000) * PRICE_IN +
+        (usage.completion_tokens / 1_000_000) * PRICE_OUT
+      ).toFixed(6));
     }
+
+    return { text, usage: usage ? { ...usage, cost } : null };
+  } catch (error) {
+    if (error.response?.data) {
+      console.error('DeepSeek ➜', JSON.stringify(error.response.data, null, 2));
+    }
+    throw error;
+  }
 }
 
 module.exports = enviarAIA;
