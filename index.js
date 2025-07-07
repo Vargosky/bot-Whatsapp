@@ -188,19 +188,12 @@ async function handleUser(uid) {
 
 
 // ─────────── PEDIR CONFIRMACIÓN ───────────
-async function enviarPeticionContinuar(chat){
-  const txt = 'He respondido varias veces seguidas. Si quieres continuar escribe *Continuar*. Si eres un bot escribe *Cancelar*.' + INV_MARK;
+async function enviarPeticionContinuar(chat) {
+  const txt =
+    'He respondido varias veces seguidas. Si quieres continuar escribe *Continuar*. ' +
+    'Si eres un bot escribe *Cancelar*.' + INV_MARK;
 
-  if (USE_BUTTONS) {
-    try {
-      const btn = new Buttons(txt, [ { body: 'Continuar' }, { body: 'Cancelar' } ], BTN_TITLE, BTN_FOOTER);
-      await chat.sendMessage(btn);
-      return;
-    } catch(e) {
-      console.warn('⚠️  No fue posible enviar botones. Fallback a texto.', e.message);
-    }
-  }
-
+  // Siempre enviamos texto plano
   await safeSend(chat, txt);
 }
 
