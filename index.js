@@ -107,59 +107,85 @@ client.on('message', async msg => {
 });
 
 // ─────────── HANDLE USER ───────────
-async function handleUser(uid){
+// ─────────── HANDLE USER ───────────
+async function handleUser(uid) {
   const body = lastUserMsg[uid];
   const chat = lastChats[uid];
   if (!body || !chat) return;
-  if (lastReply[uid] && Date.now() - lastReply[uid] < COOLDOWN_MS) return;
 
-  // Límite de turnos
-  if (botTurns[uid] >= MAX_TURNS) {
+  /* ---------- 1. Límite de turnos ---------- */
+  if ((botTurns[uid] || 0) >= MAX_TURNS) {
     await enviarPeticionContinuar(chat);
-    needAck[uid]    = true;
-    silenceTill[uid]= Date.now() + SILENCE_MIN;
-    lastReply[uid]  = Date.now();
+    console.log('[🤖 Pregunta de confirmación enviada]');
+    needAck[uid]     = true;
+    botTurns[uid]    = 0;                            // reinicia contador
+    silenceTill[uid] = Date.now() + SILENCE_MIN;     // pausa 60 s
+    lastReply[uid]   = Date.now();
     return;
   }
 
-  // Guarda en BD
+  /* ---------- 2. Cool-down anti-spam ---------- */
+  if (lastReply[uid] && Date.now() - lastReply[uid] < COOLDOWN_MS) return;
+
+  // ---------- 3. Guarda en BD ----------
   const ts = new Date().toISOString();
   let rowId = null;
-  try { rowId = await runDb('INSERT INTO messages(timestamp,sender,messageContent) VALUES(?,?,?)',[ts,uid,body]); }
-  catch(e) { console.error('BD ERROR:', e.message); }
+  try {
+    rowId = await runDb(
+      'INSERT INTO messages(timestamp,sender,messageContent) VALUES(?,?,?)',
+      [ts, uid, body]
+    );
+  } catch (e) {
+    console.error('BD ERROR:', e.message);
+  }
 
+  // ---------- 4. Llama a la IA ----------
   try {
     await chat.sendStateTyping();
     const { text: respOriginal, usage } = await enviarAIA(body);
 
-    // Detectar marcador de imagen
+    // --- Detectar marcador de imagen ---
     let resp = respOriginal || '';
     const fotoMatch = resp.match(/\[\[FOTO(\d)?\]\]/i);
     let fotoNumero = null;
     if (fotoMatch) {
-      fotoNumero = fotoMatch[1] ? parseInt(fotoMatch[1],10) : null;
-      resp = resp.replace(/\[\[FOTO(\d)?\]\]/i,'').trim();
+      fotoNumero = fotoMatch[1] ? parseInt(fotoMatch[1], 10) : null;
+      resp = resp.replace(/\[\[FOTO(\d)?\]\]/i, '').trim();
     }
 
+    // --- Enviar texto y/o foto ---
     if (fotoMatch) {
       if (resp) await safeSend(chat, resp + INV_MARK);
-      await enviarFoto(uid, fotoNumero, false, 'Ejemplo de proyecto 📸'+INV_MARK);
+      await enviarFoto(uid, fotoNumero, false, 'Ejemplo de proyecto 📸' + INV_MARK);
     } else {
       await enviarFoto(uid, null, true, (resp || 'Ejemplo de proyecto 📸') + INV_MARK);
     }
 
-    await runDb('UPDATE messages SET responseContent=?,promptTokens=?,completionTokens=?,totalTokens=?,costUSD=? WHERE id=?',[respOriginal,usage?.prompt_tokens??null,usage?.completion_tokens??null,usage?.total_tokens??null,usage?.cost??null,rowId]);
+    // --- Guarda métricas ---
+    await runDb(
+      `UPDATE messages SET responseContent=?,promptTokens=?,completionTokens=?,totalTokens=?,costUSD=? WHERE id=?`,
+      [
+        respOriginal,
+        usage?.prompt_tokens ?? null,
+        usage?.completion_tokens ?? null,
+        usage?.total_tokens ?? null,
+        usage?.cost ?? null,
+        rowId
+      ]
+    );
 
     botTurns[uid]  = (botTurns[uid] || 0) + 1;
     lastReply[uid] = Date.now();
-  } catch(err) {
+
+  } catch (err) {
     console.error('IA ERROR:', err.message);
-    await safeSend(chat,'Lo siento, ocurrió un error. Inténtalo más tarde.'+INV_MARK);
-    if (rowId) await runDb('UPDATE messages SET errorContent=? WHERE id=?',[err.message,rowId]);
+    await safeSend(chat, 'Lo siento, ocurrió un error. Inténtalo más tarde.' + INV_MARK);
+    if (rowId) await runDb('UPDATE messages SET errorContent=? WHERE id=?', [err.message, rowId]);
   } finally {
     await chat.clearState();
   }
 }
+
 
 // ─────────── PEDIR CONFIRMACIÓN ───────────
 async function enviarPeticionContinuar(chat){
