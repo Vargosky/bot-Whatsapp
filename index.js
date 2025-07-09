@@ -142,7 +142,17 @@ async function handleUser(uid) {
   // ---------- 4. Llama a la IA ----------
   try {
     await chat.sendStateTyping();
-    const { text: respOriginal, usage } = await enviarAIA(body);
+    const historial = await getHistorial(uid, 3);  // últimos 3 turnos
+const systemPrompt = fs.readFileSync('./prompt_Einsoft.txt', 'utf-8').trim();
+
+const contexto = [
+  { role: 'system', content: systemPrompt },
+  ...historial,
+  { role: 'user', content: body }
+];
+
+const { text: respOriginal, usage } = await enviarAIA(contexto);
+
 
     // --- Detectar marcador de imagen ---
     let resp = respOriginal || '';
@@ -232,6 +242,31 @@ function runDb(sql, p = []){
     db.run(sql, p, function(err){ err ? rej(err) : res(this.lastID); });
   });
 }
+
+// Obtener historial (N pares anteriores)
+function getHistorial(uid, maxPairs = 3) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT messageContent, responseContent FROM messages
+       WHERE sender = ? AND responseContent IS NOT NULL
+       ORDER BY id DESC LIMIT ?`,
+      [uid, maxPairs],
+      (err, rows) => {
+        if (err) return reject(err);
+
+        // Lo invertimos para que vaya en orden correcto
+        const historial = [];
+        rows.reverse().forEach(row => {
+          historial.push({ role: 'user', content: row.messageContent });
+          historial.push({ role: 'assistant', content: row.responseContent });
+        });
+
+        resolve(historial);
+      }
+    );
+  });
+}
+
 
 // ─────────── START / STOP ───────────
 client.initialize();
